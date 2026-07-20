@@ -1,19 +1,17 @@
-import socket
+from scapy.all import IP, TCP, send
 
-# This is usually your home router's IP address. 
-# If yours is different (e.g., 192.168.0.1), change it here.
-target_ip = "192.168.1.1" 
+target_ip = "192.168.1.1"
 
-print(f"Initiating simulated Port Scan against {target_ip}...")
+print(f"Initiating CIC-IDS2017 Spoofed Scan against {target_ip}...")
 
-# Blast the first 1000 ports as fast as possible
+# We match the exact signature from your dataset's 5th row:
+# A single SYN packet with a hardcoded TCP Window of 253
+packet_list = []
 for port in range(1, 1000):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.01) # Ultra-low timeout to move fast
-        s.connect((target_ip, port))
-        s.close()
-    except Exception:
-        pass
+    pkt = IP(dst=target_ip)/TCP(dport=port, flags="S", window=253)
+    packet_list.append(pkt)
+
+# Blast the packets onto the network
+send(packet_list, verbose=False)
 
 print("Scan complete. Check your NIDS terminal!")

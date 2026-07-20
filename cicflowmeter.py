@@ -54,41 +54,43 @@ class Flow:
         self.bwd_header_len = 0
         self.act_data_pkt_fwd = 0
         
-        # Initialize TCP Window tracking variables
         self.init_win_bytes_fwd = -1
         self.init_win_bytes_bwd = -1
+        self.min_seg_size_forward = 9999
 
     def add_packet(self, pkt, direction, timestamp):
         self.end_time = timestamp
-        pkt_len = len(pkt)
         
-        # Track TCP Flags and Windows
+        # CICFlowMeter only measures L7 Payload length
         if TCP in pkt:
+            pkt_len = len(pkt[TCP].payload)
             flags = pkt[TCP].flags
             if 'F' in flags: self.fin_cnt += 1
             if 'P' in flags: self.psh_cnt += 1
             if 'A' in flags: self.ack_cnt += 1
             hdr_len = pkt[TCP].dataofs * 4 if pkt[TCP].dataofs else 20
             
-            # Extract Init_Win_bytes
             if direction == 'fwd' and self.init_win_bytes_fwd == -1:
                 self.init_win_bytes_fwd = pkt[TCP].window
             elif direction == 'bwd' and self.init_win_bytes_bwd == -1:
                 self.init_win_bytes_bwd = pkt[TCP].window
                 
         elif UDP in pkt:
+            pkt_len = len(pkt[UDP].payload)
             hdr_len = 8
         else:
+            pkt_len = 0
             hdr_len = 0
             
-        ip_hdr_len = pkt[IP].ihl * 4 if IP in pkt else 20
-        total_hdr_len = ip_hdr_len + hdr_len
+        # FIX: CICFlowMeter entirely ignores the IPv4 header length
+        total_hdr_len = hdr_len
 
         if direction == 'fwd':
             self.fwd_pkt_lengths.append(pkt_len)
             self.fwd_timestamps.append(timestamp)
             self.fwd_header_len += total_hdr_len
-            if TCP in pkt and len(pkt[TCP].payload) > 0:
+            self.min_seg_size_forward = min(self.min_seg_size_forward, hdr_len)
+            if pkt_len > 0:
                 self.act_data_pkt_fwd += 1
         else:
             self.bwd_pkt_lengths.append(pkt_len)
@@ -101,13 +103,13 @@ class Flow:
 
     def _calc_iat(self, timestamps):
         if len(timestamps) < 2: return 0, 0, 0, 0, 0
-        # Convert to microseconds like CICFlowMeter
         iats = np.diff(timestamps) * 1e6 
         return np.sum(iats), np.mean(iats), np.std(iats), np.max(iats), np.min(iats)
 
     def extract_features(self):
-        dur_s = max(self.end_time - self.start_time, 1e-6)
-        dur_us = dur_s * 1e6
+        # Force a minimum of 1 microsecond to prevent dividing by zero on identical timestamps
+        dur_us = max((self.end_time - self.start_time) * 1e6, 1.0)
+        dur_s = dur_us / 1e6
         
         tot_fwd_pkts = len(self.fwd_pkt_lengths)
         tot_bwd_pkts = len(self.bwd_pkt_lengths)
@@ -125,7 +127,6 @@ class Flow:
         fwd_iat_tot, fwd_iat_mean, fwd_iat_std, fwd_iat_max, fwd_iat_min = self._calc_iat(self.fwd_timestamps)
         bwd_iat_tot, bwd_iat_mean, bwd_iat_std, bwd_iat_max, bwd_iat_min = self._calc_iat(self.bwd_timestamps)
 
-        # Build feature dict matching your model's exact naming
         return {
             'Destination Port': self.dst_port,
             'Flow Duration': dur_us,
@@ -172,9 +173,9 @@ class Flow:
             'Init_Win_bytes_forward': self.init_win_bytes_fwd if self.init_win_bytes_fwd != -1 else 0,
             'Init_Win_bytes_backward': self.init_win_bytes_bwd if self.init_win_bytes_bwd != -1 else 0,
             'act_data_pkt_fwd': self.act_data_pkt_fwd,
-            'min_seg_size_forward': 20,       # Default assumed TCP/IP min
-            'Active Mean': 0, 'Active Max': 0, 'Active Min': 0, # Simplified
-            'Idle Mean': 0, 'Idle Max': 0, 'Idle Min': 0        # Simplified
+            'min_seg_size_forward': self.min_seg_size_forward if self.min_seg_size_forward != 9999 else 20,
+            'Active Mean': 0, 'Active Max': 0, 'Active Min': 0,
+            'Idle Mean': 0, 'Idle Max': 0, 'Idle Min': 0
         }
 
 # ---------------------------------------------------------
@@ -217,16 +218,13 @@ while True:
             print("No TCP/UDP flows found in this chunk.")
             continue
             
-        # Extract features and predict
         print(f"[Inference] Running ML Model on {len(flows)} unique flows...")
         for key, flow in flows.items():
             feats = flow.extract_features()
             
-            # Format directly into the DataFrame order
             mapped_feats = [feats[col] for col in FEATURE_ORDER]
             vector = pd.DataFrame([mapped_feats], columns=FEATURE_ORDER)
             
-            # ML Pipeline
             vector_scaled = scaler.transform(vector)
             pred = model.predict(vector_scaled)
             label = label_encoder.inverse_transform(pred)
