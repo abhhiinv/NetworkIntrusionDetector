@@ -1,4 +1,4 @@
 *.csv
 *.pcap
-*.py
+cell*.py
 *.pkl
