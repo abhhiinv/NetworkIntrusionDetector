@@ -53,18 +53,29 @@ class Flow:
         self.fwd_header_len = 0
         self.bwd_header_len = 0
         self.act_data_pkt_fwd = 0
+        
+        # Initialize TCP Window tracking variables
+        self.init_win_bytes_fwd = -1
+        self.init_win_bytes_bwd = -1
 
     def add_packet(self, pkt, direction, timestamp):
         self.end_time = timestamp
         pkt_len = len(pkt)
         
-        # Track TCP Flags
+        # Track TCP Flags and Windows
         if TCP in pkt:
             flags = pkt[TCP].flags
             if 'F' in flags: self.fin_cnt += 1
             if 'P' in flags: self.psh_cnt += 1
             if 'A' in flags: self.ack_cnt += 1
             hdr_len = pkt[TCP].dataofs * 4 if pkt[TCP].dataofs else 20
+            
+            # Extract Init_Win_bytes
+            if direction == 'fwd' and self.init_win_bytes_fwd == -1:
+                self.init_win_bytes_fwd = pkt[TCP].window
+            elif direction == 'bwd' and self.init_win_bytes_bwd == -1:
+                self.init_win_bytes_bwd = pkt[TCP].window
+                
         elif UDP in pkt:
             hdr_len = 8
         else:
@@ -158,8 +169,8 @@ class Flow:
             'ACK Flag Count': self.ack_cnt,
             'Average Packet Size': tot_bytes / tot_pkts if tot_pkts > 0 else 0,
             'Subflow Fwd Bytes': totlen_fwd,
-            'Init_Win_bytes_forward': 0,      # Simplified for demo
-            'Init_Win_bytes_backward': 0,     # Simplified for demo
+            'Init_Win_bytes_forward': self.init_win_bytes_fwd if self.init_win_bytes_fwd != -1 else 0,
+            'Init_Win_bytes_backward': self.init_win_bytes_bwd if self.init_win_bytes_bwd != -1 else 0,
             'act_data_pkt_fwd': self.act_data_pkt_fwd,
             'min_seg_size_forward': 20,       # Default assumed TCP/IP min
             'Active Mean': 0, 'Active Max': 0, 'Active Min': 0, # Simplified
