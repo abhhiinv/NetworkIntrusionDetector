@@ -1,5 +1,4 @@
 *.csv
 *.pcap
 cell*.py
-*.pkl
-output/v1
+output/
